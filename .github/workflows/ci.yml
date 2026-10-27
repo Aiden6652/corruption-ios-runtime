@@ -24,12 +24,41 @@ jobs:
         run: |
           { xcodebuild -version; echo "---tools---"; which xcodegen pod cmake ninja clang; echo "---os---"; uname -a; sw_vers; } > env.log 2>&1 || true
 
-      # === 通道验证占位（确认 publish 双通道可用后，再换回真实编译步骤） ===
-      - name: CHANNEL-TEST placeholder
-        run: |
-          echo "make ok (channel test)" > make.log
-          echo "BUILD SUCCEEDED (channel test placeholder)" > build.log
+      - name: Install build tools (XcodeGen)
+        run: brew install xcodegen 2>/dev/null || true
 
+      # 交叉编译 Unicorn (iOS arm64) 到 unicorn/prebuilt/（项目自带 make.sh）
+      - name: Build Unicorn for iOS (arm64)
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          chmod +x make.sh
+          ./make.sh iOS 2>&1 | tee make.log
+
+      - name: Generate Xcode project
+        run: cd "$GITHUB_WORKSPACE" && xcodegen generate
+
+      # MobileVLCKit 走 CocoaPods 二进制分发（失败不阻断，走 HAVE_VLCKIT stub）。
+      - name: Install CocoaPods deps (MobileVLCKit)
+        continue-on-error: true
+        run: cd "$GITHUB_WORKSPACE" && (pod install --repo-update || pod install)
+
+      # 无签名构建：仅验证 C/ObjC/Swift 能通过编译+链接。
+      - name: Build app (no code signing)
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          if [ -d CorruptionIOS.xcworkspace ]; then
+            xcodebuild -workspace CorruptionIOS.xcworkspace -scheme CorruptionIOS \
+              -destination 'generic/platform=iOS' \
+              CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+              ONLY_ACTIVE_ARCH=NO build 2>&1 | tee build.log
+          else
+            xcodebuild -project CorruptionIOS.xcodeproj -scheme CorruptionIOS \
+              -destination 'generic/platform=iOS' \
+              CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+              ONLY_ACTIVE_ARCH=NO build 2>&1 | tee build.log
+          fi
+
+      # 回传编译日志：主通道 ci-log 分支（SSH 可读），副通道 commit status（匿名可读）。
       - name: Publish build log
         if: always()
         env:
