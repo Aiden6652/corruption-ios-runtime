@@ -7,6 +7,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: ios-ci-${{ github.ref }}
   cancel-in-progress: true
@@ -24,21 +27,17 @@ jobs:
       - name: Install build tools (XcodeGen)
         run: brew install xcodegen 2>/dev/null || true
 
-      # Unicorn 没有现成 iOS 二进制发行，这里在 CI 里交叉编出 arm64 静态库。
+      # 交叉编译 Unicorn (iOS arm64) 到 unicorn/prebuilt/（项目自带 make.sh）
       - name: Build Unicorn for iOS (arm64)
         run: |
-          git clone --depth 1 https://github.com/unicorn-engine/unicorn.git "$RUNNER_TEMP/unicorn"
-          cd "$RUNNER_TEMP/unicorn"
-          ./make.sh iOS
-          mkdir -p "$GITHUB_WORKSPACE/unicorn/prebuilt/lib" "$GITHUB_WORKSPACE/unicorn/prebuilt/include"
-          cp libunicorn.a "$GITHUB_WORKSPACE/unicorn/prebuilt/lib/" 2>/dev/null || \
-            cp unicorn/libunicorn.a "$GITHUB_WORKSPACE/unicorn/prebuilt/lib/" 2>/dev/null || true
-          cp -R include "$GITHUB_WORKSPACE/unicorn/prebuilt/"
+          cd "$GITHUB_WORKSPACE"
+          chmod +x make.sh
+          ./make.sh iOS 2>&1 | tee make.log
 
       - name: Generate Xcode project
         run: cd "$GITHUB_WORKSPACE" && xcodegen generate
 
-      # MobileVLCKit 走 CocoaPods 二进制分发。允许失败，把日志留给下一步。
+      # MobileVLCKit 走 CocoaPods 二进制分发。
       - name: Install CocoaPods deps (MobileVLCKit)
         run: cd "$GITHUB_WORKSPACE" && (pod install --repo-update || pod install)
         continue-on-error: true
@@ -60,9 +59,27 @@ jobs:
           fi
         continue-on-error: true
 
-      - name: Upload build log
+      # 把编译日志 force-push 到 ci-log 分支，本机通过 SSH git fetch 即可读取，
+      # 形成「推代码 -> 云端编译 -> 读日志 -> 修 -> 再推」的闭环。
+      - name: Publish build log to ci-log branch
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-build-log
-          path: build.log
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p ci
+          {
+            echo "===== MAKE.LOG ====="
+            cat make.log 2>/dev/null
+            echo
+            echo "===== BUILD.LOG ====="
+            cat build.log 2>/dev/null
+          } > ci/last-run.log
+          cd /tmp && rm -rf cilog && mkdir cilog && cd cilog
+          git init -q
+          git config user.email "ci-bot@corruption.local"
+          git config user.name "ci-bot"
+          git remote add origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/Aiden6652/corruption-ios-runtime.git
+          mkdir -p ci
+          cp "$GITHUB_WORKSPACE/ci/last-run.log" ci/last-run.log
+          git add -A
+          git commit -q -m "[skip ci] build log"
+          git push -f origin HEAD:ci-log
