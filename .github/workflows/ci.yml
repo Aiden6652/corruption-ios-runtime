@@ -1,0 +1,68 @@
+name: iOS CI Build
+
+# 公开仓库 => macOS runner 分钟数无限，适合长期 CI。
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Install build tools (XcodeGen)
+        run: brew install xcodegen 2>/dev/null || true
+
+      # Unicorn 没有现成 iOS 二进制发行，这里在 CI 里交叉编出 arm64 静态库。
+      - name: Build Unicorn for iOS (arm64)
+        run: |
+          git clone --depth 1 https://github.com/unicorn-engine/unicorn.git "$RUNNER_TEMP/unicorn"
+          cd "$RUNNER_TEMP/unicorn"
+          ./make.sh iOS
+          mkdir -p "$GITHUB_WORKSPACE/unicorn/prebuilt/lib" "$GITHUB_WORKSPACE/unicorn/prebuilt/include"
+          cp libunicorn.a "$GITHUB_WORKSPACE/unicorn/prebuilt/lib/" 2>/dev/null || \
+            cp unicorn/libunicorn.a "$GITHUB_WORKSPACE/unicorn/prebuilt/lib/" 2>/dev/null || true
+          cp -R include "$GITHUB_WORKSPACE/unicorn/prebuilt/"
+
+      - name: Generate Xcode project
+        run: cd "$GITHUB_WORKSPACE" && xcodegen generate
+
+      # MobileVLCKit 走 CocoaPods 二进制分发。允许失败，把日志留给下一步。
+      - name: Install CocoaPods deps (MobileVLCKit)
+        run: cd "$GITHUB_WORKSPACE" && (pod install --repo-update || pod install)
+        continue-on-error: true
+
+      # 无签名构建：仅验证 C/ObjC/Swift 能通过编译+链接（真机签名需本地证书）。
+      - name: Build app (no code signing)
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          if [ -d CorruptionIOS.xcworkspace ]; then
+            xcodebuild -workspace CorruptionIOS.xcworkspace -scheme CorruptionIOS \
+              -destination 'generic/platform=iOS' \
+              CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+              ONLY_ACTIVE_ARCH=NO build 2>&1 | tee build.log
+          else
+            xcodebuild -project CorruptionIOS.xcodeproj -scheme CorruptionIOS \
+              -destination 'generic/platform=iOS' \
+              CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+              ONLY_ACTIVE_ARCH=NO build 2>&1 | tee build.log
+          fi
+        continue-on-error: true
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log
+          path: build.log

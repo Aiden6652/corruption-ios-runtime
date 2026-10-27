@@ -1,0 +1,47 @@
+# XcodeGen spec. Run: `xcodegen generate` then open CorruptionIOS.xcodeproj.
+# CI 用 GitHub Actions (macos-14) 自动完成：编译 Unicorn(iOS) -> pod install -> xcodegen -> xcodebuild。
+name: CorruptionIOS
+options:
+  bundleIdPrefix: com.you.CorruptionIOS
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    SWIFT_OBJC_BRIDGING_HEADER: ios/Bridging.h
+    ENABLE_BITCODE: false
+    # Unicorn 由 CI 在 macos runner 上交叉编译后放到 unicorn/prebuilt。
+    HEADER_SEARCH_PATHS: $(inherited) $(SRCROOT)/unicorn/prebuilt/include
+    LIBRARY_SEARCH_PATHS: $(inherited) $(SRCROOT)/unicorn/prebuilt/lib
+    OTHER_LDFLAGS: $(inherited) -lunicorn -framework Metal -framework MetalKit -framework CoreVideo -framework CoreMedia -framework VideoToolbox
+targets:
+  CorruptionIOS:
+    type: app
+    platform: iOS
+    info:
+      path: ios/Info.plist
+    entitlements: ios/Entitlements.plist
+    sources:
+      - path: ios
+      - path: runtime/win32
+        buildPhase: sources
+      - path: runtime/jit
+      - path: runtime/translator
+      - path: runtime/libvlc_shim
+      - path: runtime
+        excludes:
+          - win32
+          - jit
+          - translator
+          - libvlc_shim
+    frameworks:
+      - Metal
+      - MetalKit
+      - CoreVideo
+      - CoreMedia
+      - VideoToolbox
+    # MobileVLCKit 由 CocoaPods 提供（见 Podfile），此处不再声明，避免重复。
+    schemes:
+      CorruptionIOS:
+        build:
+          targets:
+            CorruptionIOS: all

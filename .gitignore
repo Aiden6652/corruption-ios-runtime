@@ -1,0 +1,5 @@
+.build/
+DerivedData/
+*.xcworkspace/
+Pods/
+unicorn/prebuilt/
