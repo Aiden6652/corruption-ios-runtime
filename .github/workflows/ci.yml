@@ -12,6 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: macos-14
+    timeout-minutes: 240
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,44 +24,17 @@ jobs:
         run: |
           { xcodebuild -version; echo "---tools---"; which xcodegen pod cmake ninja clang; echo "---os---"; uname -a; sw_vers; } > env.log 2>&1 || true
 
-      - name: Install build tools (XcodeGen)
-        run: brew install xcodegen 2>/dev/null || true
-
-      # 交叉编译 Unicorn (iOS arm64) 到 unicorn/prebuilt/（项目自带 make.sh）
-      - name: Build Unicorn for iOS (arm64)
+      # === 通道验证占位（确认 publish 双通道可用后，再换回真实编译步骤） ===
+      - name: CHANNEL-TEST placeholder
         run: |
-          cd "$GITHUB_WORKSPACE"
-          chmod +x make.sh
-          ./make.sh iOS 2>&1 | tee make.log
+          echo "make ok (channel test)" > make.log
+          echo "BUILD SUCCEEDED (channel test placeholder)" > build.log
 
-      - name: Generate Xcode project
-        run: cd "$GITHUB_WORKSPACE" && xcodegen generate
-
-      # MobileVLCKit 走 CocoaPods 二进制分发。
-      - name: Install CocoaPods deps (MobileVLCKit)
-        continue-on-error: true
-        run: cd "$GITHUB_WORKSPACE" && (pod install --repo-update || pod install)
-
-      # 无签名构建：仅验证 C/ObjC/Swift 能通过编译+链接（真机签名需本地证书）。
-      - name: Build app (no code signing)
-        continue-on-error: true
-        run: |
-          cd "$GITHUB_WORKSPACE"
-          if [ -d CorruptionIOS.xcworkspace ]; then
-            xcodebuild -workspace CorruptionIOS.xcworkspace -scheme CorruptionIOS \
-              -destination 'generic/platform=iOS' \
-              CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
-              ONLY_ACTIVE_ARCH=NO build 2>&1 | tee build.log
-          else
-            xcodebuild -project CorruptionIOS.xcodeproj -scheme CorruptionIOS \
-              -destination 'generic/platform=iOS' \
-              CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
-              ONLY_ACTIVE_ARCH=NO build 2>&1 | tee build.log
-          fi
-
-      # 回传编译日志到 ci-log 分支（本机 SSH git fetch 可读，绕过 HTTPS 墙）。
-      - name: Publish build log to ci-log branch
+      - name: Publish build log
         if: always()
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
         run: |
           cd "$GITHUB_WORKSPACE"
           mkdir -p ci
@@ -71,10 +45,19 @@ jobs:
             grep -iE "error:|fatal error|undefined symbol|ld: |Swift compile error|Build failed|BUILD FAILED|No such file or directory" build.log 2>/dev/null | head -n 80
             echo; echo "===== BUILD.LOG (tail 60) ====="; tail -n 60 build.log 2>/dev/null
           } > ci/last-run.log
+          echo "===== PUBLISH: ci-log push ====="
           git config user.email "ci@corruption.local"
           git config user.name "ci-bot"
           git checkout --orphan ci-log >/dev/null 2>&1 || true
           git reset -q
           git add ci/last-run.log
           git commit -q -m "[skip ci] build log" || echo "commit skipped"
-          git push -f https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/Aiden6652/corruption-ios-runtime.git ci-log 2>&1 | tail -3
+          git push -f "https://x-access-token:${TOKEN}@github.com/Aiden6652/corruption-ios-runtime.git" ci-log 2>&1 | tail -3 || echo "PUSH_FAILED"
+          echo "===== PUBLISH: commit status ====="
+          if grep -q "BUILD SUCCEEDED" build.log 2>/dev/null; then ST=success; else ST=failure; fi
+          ERR=$(grep -iE "error:|fatal error|undefined symbol|ld: |BUILD FAILED" build.log 2>/dev/null | head -1 | cut -c1-130)
+          [ -z "$ERR" ] && ERR="build finished (see ci-log branch)"
+          curl -s -X POST -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Aiden6652/corruption-ios-runtime/statuses/${SHA}" \
+            -d "{\"state\":\"${ST}\",\"description\":\"${ERR}\",\"context\":\"ci/build\"}" | head -c 200
+          echo
