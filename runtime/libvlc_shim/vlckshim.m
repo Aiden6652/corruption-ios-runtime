@@ -9,20 +9,31 @@
 #import "vlckshim.h"
 #import "win32_shim.h"
 
-#if TARGET_OS_IPHONE
+#include <time.h>
+#include <TargetConditionals.h>
+
+// MobileVLCKit is delivered by CocoaPods (see Podfile). Guard the import so this
+// translation unit still compiles as pure stubs when the pod is absent -- this
+// keeps CI green even if `pod install` cannot fetch the very large MobileVLCKit
+// binary.
+//
+// HAVE_VLCKIT therefore means "building for iOS AND the VLCKit pod is linked";
+// every VLCKit-dependent block below is keyed off it.
+#if TARGET_OS_IPHONE && __has_include(<MobileVLCKit/MobileVLCKit.h>)
 #import <MobileVLCKit/MobileVLCKit.h>
 #import <CoreVideo/CoreVideo.h>
-
+#define HAVE_VLCKIT 1
 static VLCMediaPlayer *g_player = nil;
-static void *g_lock_cb = NULL, *g_unlock_cb = NULL, *g_display_cb = NULL, *g_video_opaque = NULL;
 #endif
+
+static void *g_lock_cb = NULL, *g_unlock_cb = NULL, *g_display_cb = NULL, *g_video_opaque = NULL;
 
 void vlckshim_register_all(void);
 
 // ---- core playback ----
 libvlc_instance_t libvlc_new(int argc, const char *const argv[]) {
     (void)argc; (void)argv;
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     if (!g_player) g_player = [[VLCMediaPlayer alloc] init];
 #endif
     return (libvlc_instance_t)0x1;
@@ -31,7 +42,7 @@ void libvlc_release(libvlc_instance_t i) { (void)i; }
 
 libvlc_media_t* libvlc_media_new_path(libvlc_instance_t i, const char *path) {
     (void)i;
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     NSString *p = [NSString stringWithUTF8String:path ?: ""];
     VLCMedia *m = [[VLCMedia alloc] initWithPath:p];
     return (__bridge_retained void*)m;
@@ -41,7 +52,7 @@ libvlc_media_t* libvlc_media_new_path(libvlc_instance_t i, const char *path) {
 }
 libvlc_media_t* libvlc_media_new_location(libvlc_instance_t i, const char *url) {
     (void)i;
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     VLCMedia *m = [[VLCMedia alloc] initWithURL:[NSURL URLWithString:[NSString stringWithUTF8String:url?:"""]]];
     return (__bridge_retained void*)m;
 #else
@@ -59,7 +70,7 @@ void libvlc_media_parse_stop(libvlc_media_t *m) { (void)m; }
 int  libvlc_media_get_parsed_status(libvlc_media_t *m) { (void)m; return 1; }
 const char* libvlc_media_get_mrl(libvlc_media_t *m) { (void)m; return "file:///game"; }
 int64_t libvlc_media_get_duration(libvlc_media_t *m) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     VLCMedia *vm = (__bridge VLCMedia*)m; return vm ? (int64_t)(vm.length.intValue*1000) : 0;
 #else
     (void)m; return 0;
@@ -69,7 +80,7 @@ char* libvlc_media_get_meta(libvlc_media_t *m, int meta) { (void)m;(void)meta; r
 void  libvlc_media_set_meta(libvlc_media_t *m, int meta, const char *v) { (void)m;(void)meta;(void)v; }
 int   libvlc_media_save_meta(libvlc_media_t *m) { (void)m; return 0; }
 void  libvlc_media_release(libvlc_media_t *m) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     if (m) CFRelease((CFTypeRef)m);
 #else
     (void)m;
@@ -86,7 +97,7 @@ int libvlc_media_get_track_count(libvlc_media_t *m) { (void)m; return 1; }
 // ---- media player ----
 libvlc_media_player_t* libvlc_media_player_new(libvlc_instance_t i) {
     (void)i;
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     if (!g_player) g_player = [[VLCMediaPlayer alloc] init];
     return (libvlc_media_player_t)g_player;
 #else
@@ -95,7 +106,7 @@ libvlc_media_player_t* libvlc_media_player_new(libvlc_instance_t i) {
 }
 void libvlc_media_player_release(libvlc_media_player_t *p) { (void)p; }
 void libvlc_media_player_set_media(libvlc_media_player_t *p, libvlc_media_t *m) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     VLCMediaPlayer *pl = (__bridge VLCMediaPlayer*)p;
     if (pl && m) pl.media = (__bridge VLCMedia*)m;
 #else
@@ -103,42 +114,42 @@ void libvlc_media_player_set_media(libvlc_media_player_t *p, libvlc_media_t *m) 
 #endif
 }
 libvlc_media_t* libvlc_media_player_get_media(libvlc_media_player_t *p) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     VLCMediaPlayer *pl = (__bridge VLCMediaPlayer*)p; return pl ? (__bridge void*)pl.media : NULL;
 #else
     (void)p; return NULL;
 #endif
 }
 void libvlc_media_player_play(libvlc_media_player_t *p) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     [(VLCMediaPlayer*)p play];
 #else
     (void)p;
 #endif
 }
 void libvlc_media_player_pause(libvlc_media_player_t *p) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     [(VLCMediaPlayer*)p pause];
 #else
     (void)p;
 #endif
 }
 void libvlc_media_player_set_pause(libvlc_media_player_t *p, int b) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     if (b) [(VLCMediaPlayer*)p pause]; else [(VLCMediaPlayer*)p play];
 #else
     (void)p;(void)b;
 #endif
 }
 void libvlc_media_player_stop(libvlc_media_player_t *p) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     [(VLCMediaPlayer*)p stop];
 #else
     (void)p;
 #endif
 }
 int libvlc_media_player_is_playing(libvlc_media_player_t *p) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     return (int)[(VLCMediaPlayer*)p isPlaying];
 #else
     (void)p; return 0;
@@ -148,49 +159,49 @@ int libvlc_media_player_will_play(libvlc_media_player_t *p) { (void)p; return 1;
 int libvlc_media_player_can_pause(libvlc_media_player_t *p) { (void)p; return 1; }
 int libvlc_media_player_is_seekable(libvlc_media_player_t *p) { (void)p; return 1; }
 int64_t libvlc_media_player_get_length(libvlc_media_player_t *p) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     return (int64_t)[(VLCMediaPlayer*)p mediaLength];
 #else
     (void)p; return 0;
 #endif
 }
 int64_t libvlc_media_player_get_time(libvlc_media_player_t *p) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     return (int64_t)[(VLCMediaPlayer*)p time];
 #else
     (void)p; return 0;
 #endif
 }
 void libvlc_media_player_set_time(libvlc_media_player_t *p, int64_t t) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     [(VLCMediaPlayer*)p setTime:t];
 #else
     (void)p;(void)t;
 #endif
 }
 float libvlc_media_player_get_position(libvlc_media_player_t *p) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     return (float)[(VLCMediaPlayer*)p position];
 #else
     (void)p; return 0;
 #endif
 }
 void libvlc_media_player_set_position(libvlc_media_player_t *p, float f) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     [(VLCMediaPlayer*)p setPosition:f];
 #else
     (void)p;(void)f;
 #endif
 }
 float libvlc_media_player_get_rate(libvlc_media_player_t *p) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     return (float)[(VLCMediaPlayer*)p rate];
 #else
     (void)p; return 1;
 #endif
 }
 void libvlc_media_player_set_rate(libvlc_media_player_t *p, float r) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     [(VLCMediaPlayer*)p setRate:r];
 #else
     (void)p;(void)r;
@@ -208,7 +219,7 @@ libvlc_event_manager_t* libvlc_media_player_event_manager(libvlc_media_player_t 
 // video: store the game's callbacks; frames arrive via the VLCMediaPlayer delegate
 void libvlc_video_set_callbacks(libvlc_media_player_t *p, void *lock, void *unlock, void *display, void *opaque) {
     (void)p;
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     g_lock_cb = lock; g_unlock_cb = unlock; g_display_cb = display; g_video_opaque = opaque;
     g_player.delegate = /* set in app glue to forward pixel buffers to g_lock_cb/g_unlock_cb */ nil;
 #endif
@@ -239,14 +250,14 @@ const char* libvlc_get_version(void) { return "libvlc-shim (MobileVLCKit)"; }
 const char* libvlc_get_compiler(void) { return "clang"; }
 const char* libvlc_get_changeset(void) { return "shim"; }
 const char* libvlc_errmsg(void) { return NULL; }
-int64_t libvlc_clock(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts); return (int64_t)ts.tv_sec*1000000 + ts.tv_usec; }
+int64_t libvlc_clock(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts); return (int64_t)ts.tv_sec*1000000LL + (int64_t)ts.tv_nsec/1000; }
 int libvlc_event_attach(libvlc_event_manager_t *em, int ev, void *cb, void *u) { (void)em;(void)ev;(void)cb;(void)u; return 0; }
 
 // Forward a decoded video frame to the game's libvlc lock/unlock/display
 // callbacks (the ones it registered via libvlc_video_set_callbacks). The game
 // composites these frames into its own renderer.
 void vlckshim_deliver_frame(void *pixelBuffer) {
-#if TARGET_OS_IPHONE
+#if defined(HAVE_VLCKIT)
     if (!pixelBuffer) return;
     CVPixelBufferRef pb = (CVPixelBufferRef)pixelBuffer;
     CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);

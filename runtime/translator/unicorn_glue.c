@@ -10,7 +10,7 @@
 #include "pe_loader.h"
 #include "win32_shim.h"
 #include "path_resolve.h"
-#include "libvlc_shim.h"   // provides vlckshim_register_all + libvlc_* bridges
+#include "vlckshim.h"       // provides vlckshim_register_all + libvlc_* bridges
 
 #include <unicorn/unicorn.h>
 
@@ -18,6 +18,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <sys/time.h>   // struct timeval / gettimeofday
 
 struct emu_ctx {
     uc_engine *uc;
@@ -28,6 +29,9 @@ struct emu_ctx {
     size_t     calls;
     uint64_t   last_pc;
 };
+
+// Installed once (in emu_load_exe) after the trampoline region exists; see below.
+static void install_hook(emu_ctx_t *c);
 
 emu_ctx_t *emu_create(void) {
     emu_ctx_t *c = (emu_ctx_t*)calloc(1, sizeof(*c));
@@ -53,6 +57,9 @@ int emu_load_exe(emu_ctx_t *ctx, const char *exe_path,
 
     if (pe_load(exe_path, tramp_base, tramp_alloc, ctx, &ctx->img) != 0) return -1;
     ctx->n_imp = ctx->img.n_imports;
+    // The import hook locates trampolines via img.trampoline_base. The loader
+    // itself leaves it untouched, so set it here or no import is ever hooked.
+    ctx->img.trampoline_base = tramp_base;
 
     // Map PE segments into the emulator.
     for (size_t i = 0; i < ctx->img.n_segments; i++) {
@@ -79,6 +86,7 @@ int emu_load_exe(emu_ctx_t *ctx, const char *exe_path,
         uint64_t le = tv;                               // IAT slot value (guest VA)
         uc_mem_write(ctx->uc, imp->iat_va, &le, 8);     // redirect import to trampoline
     }
+    install_hook(ctx); // install once; persists for warmup + run
     return 0;
 }
 
@@ -122,11 +130,15 @@ static void hook_code(uc_engine *uc, uint64_t address, uint32_t size, void *user
 
 static void install_hook(emu_ctx_t *c) {
     uc_hook h;
-    uc_hook_add(c->uc, &h, UC_HOOK_CODE, (void*)hook_code, c, 1, 0);
+    // Only hook the trampoline region (each import's UD2). Hooking every guest
+    // instruction would be catastrophically slow for a real-time rhythm game, and
+    // installing per-emu_run would stack duplicate hooks and double-dispatch.
+    uint64_t region = c->img.trampoline_base;
+    uint64_t span   = (c->img.n_imports + 1) * 16;
+    uc_hook_add(c->uc, &h, UC_HOOK_CODE, (void*)hook_code, c, region, region + span);
 }
 
 int emu_run(emu_ctx_t *ctx, uint64_t entry, uint64_t until_va, uint64_t timeout_us) {
-    install_hook(ctx);
     // Set Windows EXE entry registers: rcx=hInstance, rdx=0, r8=cmdline, r9=1
     uint64_t r = ctx->img.image_base; uc_reg_write(ctx->uc, UC_X86_REG_RCX, &r);
     uint64_t z = 0; uc_reg_write(ctx->uc, UC_X86_REG_RDX, &z);
@@ -154,6 +166,8 @@ int emu_warmup(emu_ctx_t *ctx, uint64_t entry, uint64_t warmup_us) {
     // Run the engine init (muted) to populate Unicorn's translation cache.
     return emu_run(ctx, entry, 0, warmup_us);
 }
+
+uint64_t emu_entry_va(emu_ctx_t *ctx) { return ctx ? ctx->img.entry_va : 0; }
 
 size_t emu_translated_blocks(emu_ctx_t *ctx) { return ctx->blocks; }
 size_t emu_trampoline_calls(emu_ctx_t *ctx) { return ctx->calls; }

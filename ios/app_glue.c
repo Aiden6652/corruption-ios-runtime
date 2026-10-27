@@ -3,7 +3,7 @@
 // vlckshim_deliver_frame() from the VLCMediaPlayer delegate.
 
 #include "unicorn_glue.h"
-#include "libvlc_shim.h"
+#include "vlckshim.h"
 #include "path_resolve.h"
 
 #include <pthread.h>
@@ -23,9 +23,9 @@ int run_emulator(void) {
     if (!ctx) return -1;
     if (emu_load_exe(ctx, g_exe, g_assets, 0x70000000) != 0) { emu_destroy(ctx); return -1; }
     fprintf(stderr, "[app] warmup: translating static code...\n");
-    emu_warmup(ctx, ctx->img.entry_va, 2 * 1000 * 1000); // 2s AOT warmup
+    emu_warmup(ctx, emu_entry_va(ctx), 2 * 1000 * 1000); // 2s AOT warmup
     fprintf(stderr, "[app] translated blocks=%zu, starting main loop\n", emu_translated_blocks(ctx));
-    emu_run(ctx, ctx->img.entry_va, 0, 0); // run until guest exits
+    emu_run(ctx, emu_entry_va(ctx), 0, 0); // run until guest exits
     emu_destroy(ctx);
     return 0;
 }

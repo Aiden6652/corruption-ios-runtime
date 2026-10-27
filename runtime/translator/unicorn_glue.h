@@ -21,6 +21,11 @@ emu_ctx_t *emu_create(void);
 int  emu_load_exe(emu_ctx_t *ctx, const char *exe_path,
                   const char *asset_root, uint64_t tramp_base);
 
+// Guest entry point (AddressOfEntryPoint + image base), valid after a
+// successful emu_load_exe. Provided as an accessor so the context struct can
+// stay opaque to callers.
+uint64_t emu_entry_va(emu_ctx_t *ctx);
+
 // Run guest code starting at `entry` until it reaches `until_va` (e.g. a known
 // idle/menu hook) or `timeout_us` elapses. Returns 0 on stop-VA hit, 1 on
 // timeout, <0 on error. Re-entrant: call again to continue after a yield.

@@ -10,7 +10,10 @@ settings:
     SWIFT_OBJC_BRIDGING_HEADER: ios/Bridging.h
     ENABLE_BITCODE: false
     # Unicorn 由 CI 在 macos runner 上交叉编译后放到 unicorn/prebuilt。
-    HEADER_SEARCH_PATHS: $(inherited) $(SRCROOT)/unicorn/prebuilt/include
+    # 各子模块的头文件目录：translator / win32 / jit / libvlc_shim 的 .c/.m 会交叉
+    # 引用彼此的头文件（如 unicorn_glue.c -> win32_shim.h, path_resolve.h），
+    # 必须显式列出，否则 clang 报 'xxx.h' file not found。
+    HEADER_SEARCH_PATHS: $(inherited) $(SRCROOT)/unicorn/prebuilt/include $(SRCROOT)/runtime $(SRCROOT)/runtime/win32 $(SRCROOT)/runtime/jit $(SRCROOT)/runtime/translator $(SRCROOT)/runtime/libvlc_shim
     LIBRARY_SEARCH_PATHS: $(inherited) $(SRCROOT)/unicorn/prebuilt/lib
     OTHER_LDFLAGS: $(inherited) -lunicorn -framework Metal -framework MetalKit -framework CoreVideo -framework CoreMedia -framework VideoToolbox
 targets:
