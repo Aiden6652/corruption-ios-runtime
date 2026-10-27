@@ -4,16 +4,10 @@ name: iOS CI Build
 on:
   push:
     branches: [main, master]
-  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
-  issues: write
-
-concurrency:
-  group: ios-ci-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build:
@@ -24,6 +18,10 @@ jobs:
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Show env
+        run: |
+          { xcodebuild -version; echo "---tools---"; which xcodegen pod cmake ninja clang; echo "---os---"; uname -a; sw_vers; } > env.log 2>&1 || true
 
       - name: Install build tools (XcodeGen)
         run: brew install xcodegen 2>/dev/null || true
@@ -40,11 +38,12 @@ jobs:
 
       # MobileVLCKit 走 CocoaPods 二进制分发。
       - name: Install CocoaPods deps (MobileVLCKit)
-        run: cd "$GITHUB_WORKSPACE" && (pod install --repo-update || pod install)
         continue-on-error: true
+        run: cd "$GITHUB_WORKSPACE" && (pod install --repo-update || pod install)
 
       # 无签名构建：仅验证 C/ObjC/Swift 能通过编译+链接（真机签名需本地证书）。
       - name: Build app (no code signing)
+        continue-on-error: true
         run: |
           cd "$GITHUB_WORKSPACE"
           if [ -d CorruptionIOS.xcworkspace ]; then
@@ -58,24 +57,20 @@ jobs:
               CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
               ONLY_ACTIVE_ARCH=NO build 2>&1 | tee build.log
           fi
-        continue-on-error: true
 
-      # 回传编译日志（双通道）：
-      #  1) force-push 到 ci-log 分支（本机 SSH git fetch 可读）
-      #  2) 兜底写进 "CI build log" issue（本机 WebFetch 可读，绕开 HTTPS 墙）
-      - name: Publish build log
+      # 回传编译日志到 ci-log 分支（本机 SSH git fetch 可读，绕过 HTTPS 墙）。
+      - name: Publish build log to ci-log branch
         if: always()
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd "$GITHUB_WORKSPACE"
           mkdir -p ci
           {
-            echo "===== MAKE.LOG ====="; cat make.log 2>/dev/null
-            echo; echo "===== BUILD.LOG ====="; cat build.log 2>/dev/null
+            echo "===== ENV ====="; cat env.log 2>/dev/null
+            echo; echo "===== MAKE.LOG (tail 80) ====="; tail -n 80 make.log 2>/dev/null
+            echo; echo "===== BUILD.LOG (errors) ====="
+            grep -iE "error:|fatal error|undefined symbol|ld: |Swift compile error|Build failed|BUILD FAILED|No such file or directory" build.log 2>/dev/null | head -n 80
+            echo; echo "===== BUILD.LOG (tail 60) ====="; tail -n 60 build.log 2>/dev/null
           } > ci/last-run.log
-
-          # 通道 1: ci-log 分支
           git config user.email "ci@corruption.local"
           git config user.name "ci-bot"
           git checkout --orphan ci-log >/dev/null 2>&1 || true
@@ -83,20 +78,3 @@ jobs:
           git add ci/last-run.log
           git commit -q -m "[skip ci] build log" || echo "commit skipped"
           git push -f https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/Aiden6652/corruption-ios-runtime.git ci-log 2>&1 | tail -3
-
-          # 通道 2: issue 兜底
-          EXISTING=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
-            "https://api.github.com/repos/Aiden6652/corruption-ios-runtime/issues?state=all&per_page=100" \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); print(next((str(i['number']) for i in d if i.get('title')=='CI build log'), ''))")
-          if [ -z "$EXISTING" ]; then
-            EXISTING=$(curl -s -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
-              -d '{"title":"CI build log","body":"init"}' \
-              "https://api.github.com/repos/Aiden6652/corruption-ios-runtime/issues" \
-              | python3 -c "import sys,json; print(json.load(sys.stdin).get('number',''))")
-          fi
-          if [ -n "$EXISTING" ]; then
-            BODY=$(python3 -c "import json; print(json.dumps(open('ci/last-run.log').read()[:60000]))")
-            curl -s -X PATCH -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
-              -d "{\"body\":$BODY}" "https://api.github.com/repos/Aiden6652/corruption-ios-runtime/issues/$EXISTING" >/dev/null
-            echo "published to issue #$EXISTING"
-          fi
