@@ -1,0 +1,21 @@
+===== ENV =====
+Xcode 15.4
+Build version 15F31d
+---tools---
+/opt/homebrew/lib/ruby/gems/3.3.0/bin/pod
+/opt/homebrew/bin/cmake
+/opt/homebrew/bin/ninja
+/usr/bin/clang
+---os---
+Darwin iad20-eo1211-c7c16ff9-7936-4d52-b98f-bbaab910eca1-4E1EED3027D4.local 23.6.0 Darwin Kernel Version 23.6.0: Tue Jul 21 21:56:54 PDT 2026; root:xnu-10063.141.1.713.39~1/RELEASE_ARM64_VMAPPLE arm64
+ProductName:		macOS
+ProductVersion:		14.8.9
+BuildVersion:		23J631
+
+===== MAKE.LOG (tail 80) =====
+make ok (channel test)
+
+===== BUILD.LOG (errors) =====
+
+===== BUILD.LOG (tail 60) =====
+BUILD SUCCEEDED (channel test placeholder)
