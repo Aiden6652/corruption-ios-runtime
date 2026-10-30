@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  statuses: write
 
 jobs:
   build:
@@ -25,17 +26,20 @@ jobs:
           { xcodebuild -version; echo "---tools---"; which xcodegen pod cmake ninja clang; echo "---os---"; uname -a; sw_vers; } > env.log 2>&1 || true
 
       - name: Install build tools (XcodeGen)
-        run: brew install xcodegen 2>/dev/null || true
+        run: |
+          brew install xcodegen 2>/dev/null || true
+          echo "PATH=/opt/homebrew/bin:$PATH" >> "$GITHUB_ENV"
 
       # 交叉编译 Unicorn (iOS arm64) 到 unicorn/prebuilt/（项目自带 make.sh）
       - name: Build Unicorn for iOS (arm64)
         run: |
           cd "$GITHUB_WORKSPACE"
           chmod +x make.sh
+          set -o pipefail
           ./make.sh iOS 2>&1 | tee make.log
 
       - name: Generate Xcode project
-        run: cd "$GITHUB_WORKSPACE" && xcodegen generate
+        run: cd "$GITHUB_WORKSPACE" && export PATH="/opt/homebrew/bin:$PATH" && xcodegen generate
 
       # MobileVLCKit 走 CocoaPods 二进制分发（失败不阻断，走 HAVE_VLCKIT stub）。
       - name: Install CocoaPods deps (MobileVLCKit)
@@ -77,11 +81,12 @@ jobs:
           echo "===== PUBLISH: ci-log push ====="
           git config user.email "ci@corruption.local"
           git config user.name "ci-bot"
-          git checkout --orphan ci-log >/dev/null 2>&1 || true
-          git reset -q
+          BR="ci-log-$(date +%s)"
+          git checkout --orphan "$BR" >/dev/null 2>&1
+          git rm -rf --cached . >/dev/null 2>&1 || true
           git add ci/last-run.log
           git commit -q -m "[skip ci] build log" || echo "commit skipped"
-          git push -f "https://x-access-token:${TOKEN}@github.com/Aiden6652/corruption-ios-runtime.git" ci-log 2>&1 | tail -3 || echo "PUSH_FAILED"
+          git push -f "https://x-access-token:${TOKEN}@github.com/Aiden6652/corruption-ios-runtime.git" "$BR:ci-log" 2>&1 | tail -3 || echo "PUSH_FAILED"
           echo "===== PUBLISH: commit status ====="
           if grep -q "BUILD SUCCEEDED" build.log 2>/dev/null; then ST=success; else ST=failure; fi
           ERR=$(grep -iE "error:|fatal error|undefined symbol|ld: |BUILD FAILED" build.log 2>/dev/null | head -1 | cut -c1-130)
